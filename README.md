@@ -1,0 +1,1 @@
+# Projeto-arduino---detec-o-de-imagem-e-acionamento-autom-tico
