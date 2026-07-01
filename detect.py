@@ -1,94 +1,91 @@
 import cv2
 import serial
 import time
+import os
 
-# Create the ORB detector
-orb = cv2.ORB_create(1500)
+# ---------- Ajustes (mexa aqui pra calibrar) ----------
+ORB_FEATURES   = 1500          # quantos pontos o ORB procura
+MATCH_DISTANCE = 45            # dist. maxima p/ match "bom" (menor = mais rigido)
+MATCH_THRESHOLD = 50           # quantos matches bons = "achou a foto"
+COOLDOWN_S     = 4             # segundos entre disparos (evita metralhar o servo)
+SERIAL_PORT    = "/dev/tty.usbserial-XXXX"  # AJUSTAR no Mac: rode  ls /dev/tty.*
+SERIAL_BAUD    = 9600          # tem que bater com Serial.begin() do .ino
+# ------------------------------------------------------
 
-# Load the reference image (the one you'll print)
-target = cv2.imread("nerd.jpeg", 0)
+# Detector ORB
+orb = cv2.ORB_create(ORB_FEATURES)
 
-# Check that the image loaded correctly
+# Imagem de referencia (a que voce vai imprimir/mostrar)
+# Caminho relativo ao script: funciona rodando de qualquer pasta.
+TARGET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nerd.jpeg")
+target = cv2.imread(TARGET_PATH, 0)
 if target is None:
-    print("Error: Could not load jpeg image")
+    print("Erro: nao carregou nerd.jpeg")
     exit()
 
-# Detect features in the reference image
 kp1, des1 = orb.detectAndCompute(target, None)
 
-# Open the webcam
-cam = cv2.VideoCapture(0)
+# Serial OPCIONAL: se o Arduino nao estiver ligado, roda so a deteccao.
+try:
+    arduino = serial.Serial(SERIAL_PORT, SERIAL_BAUD)
+    time.sleep(2)   # abrir a serial RESETA o Arduino; espera ele voltar
+    print(f"Arduino conectado em {SERIAL_PORT}")
+except Exception as e:
+    arduino = None
+    print(f"Sem Arduino ({e}). Rodando so deteccao (sem disparar servo).")
 
-# VER SE O CÓDIGO É ESSE MESMO !!!!!!!!!!!!
-# arduino = serial.Serial("/dev/ttyACM0", 9600)
+cam = cv2.VideoCapture(0)
+bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+last_trigger = 0
 
 while True:
     ret, frame = cam.read()
-
     if not ret:
         break
 
-    # Convert the webcam frame to grayscale
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # Detect features in the current frame
     kp2, des2 = orb.detectAndCompute(gray, None)
 
+    # Sem descritores nesse frame: so mostra a camera e segue
     if des1 is None or des2 is None:
         cv2.imshow("Camera", frame)
         if cv2.waitKey(1) == 27:
             break
         continue
 
-    # Skip this frame if no descriptors were found
-    if des2 is None:
-        cv2.imshow("Camera", frame)
-        if cv2.waitKey(1) == 27:
-            break
-        continue
-
-    # Create a brute-force matcher
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-
-    # Match the descriptors
     matches = bf.match(des1, des2)
-
-    # Sort matches by quality (smaller distance is better)
     matches = sorted(matches, key=lambda x: x.distance)
+    good = [m for m in matches if m.distance < MATCH_DISTANCE]
 
-    # Keep only good matches
-    good = [m for m in matches if m.distance < 45]
+    print(f"Matches bons: {len(good)}")
 
-    print(f"Good matches: {len(good)}")
-
-    # If enough good matches, we found the picture
-    if len(good) > 50:
+    if len(good) > MATCH_THRESHOLD:
         cv2.putText(frame, "FOUND!", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1, (0, 255, 0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        print("FOUND!")
-        # arduino.write(b'1')
-        last_trigger = time.time()  
-    # Draw the first 30 good matches
+        now = time.time()
+        if now - last_trigger > COOLDOWN_S:   # cooldown: so dispara 1x a cada COOLDOWN_S
+            last_trigger = now
+            print("FOUND! -> disparar")
+            if arduino:
+                try:
+                    arduino.write(b'1')
+                except serial.SerialException:
+                    print("Serial caiu (Arduino desplugado?) - seguindo so com deteccao.")
+                    arduino = None
+
+    # Janela de debug: mostra os matches
     match_img = cv2.drawMatches(
-        target,
-        kp1,
-        gray,
-        kp2,
-        good[:30],
-        None,
+        target, kp1, gray, kp2, good[:30], None,
         flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
     )
-
     cv2.imshow("Matches", match_img)
-
-    # For now, just show the webcam
     cv2.imshow("Camera", frame)
 
-    # Press ESC to quit
-    if cv2.waitKey(1) == 27:
+    if cv2.waitKey(1) == 27:   # ESC sai
         break
 
 cam.release()
 cv2.destroyAllWindows()
+if arduino:
+    arduino.close()
