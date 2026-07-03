@@ -17,13 +17,18 @@ void loop() {
 
         char c = Serial.read();
 
-        if (c == '1' && millis() - lastFire > COOLDOWN_MS) {
-            lastFire = millis();
+        if (c == '1') {
+            if (millis() - lastFire > COOLDOWN_MS) {
+                lastFire = millis();
 
-            spray.write(90);
-            delay(500);
+                spray.write(90);
+                delay(500);
 
-            spray.write(0);
+                spray.write(0);
+                Serial.println("FIRED");     // ACK pro Python
+            } else {
+                Serial.println("COOLDOWN");  // recebeu mas segurou o jato
+            }
         }
     }
 }
